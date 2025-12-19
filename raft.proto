@@ -1,1 +1,62 @@
-#Code here 
+syntax = "proto3";
+package raft;
+
+service RaftService {
+    rpc RequestVote (VoteRequest) returns (VoteResponse);
+    rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
+    rpc ClientRequest (ClientRequestMessage) returns (ClientRequestResponse);
+    rpc SimulatePartition (PartitionRequest) returns (PartitionResponse);
+}
+
+
+message VoteRequest {
+    int32 term = 1;          // Candidate's term
+    int32 candidateId = 2;   // ID của candidate
+    int32 lastLogIndex = 3;  // Index log cuối cùng
+    int32 lastLogTerm = 4;   // Term log cuối cùng
+}
+
+message VoteResponse {
+    int32 term = 1;          // CurrentTerm của người nhận
+    bool voteGranted = 2;    // True nếu được bầu
+}
+
+
+message AppendEntriesRequest {
+    int32 term = 1;          // Leader's term
+    int32 leaderId = 2;      // Để follower redirect client
+    int32 prevLogIndex = 3;  // Index ngay trước log mới
+    int32 prevLogTerm = 4;   // Term của prevLogIndex
+    repeated LogEntry entries = 5; // Empty nếu là heartbeat
+    int32 leaderCommit = 6;  // Leader's commitIndex
+}
+
+message AppendEntriesResponse {
+    int32 term = 1;          // CurrentTerm của người nhận
+    bool success = 2;        // True nếu khớp prevLogIndex
+    int32 lastLogIndex = 3;  // Last log index (for catch-up in log replication)
+}
+
+message ClientRequestMessage {
+    string command = 1;      // Command to apply to state machine
+}
+
+message ClientRequestResponse {
+    bool success = 1;        // True if committed, False if not leader
+    string leaderId = 2;     // ID of leader (if not leader)
+    string message = 3;      // Status message
+}
+
+message PartitionRequest {
+    repeated int32 blockedNodeIds = 1; // Node IDs to block communication with
+}
+
+message PartitionResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message LogEntry {
+    int32 term = 1;
+    string command = 2;
+}
