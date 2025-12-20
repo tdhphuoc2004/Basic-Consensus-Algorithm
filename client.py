@@ -1,10 +1,12 @@
 """
 Raft Cluster Client
-Provides a simple client interface for sending commands to the Raft cluster.
+A command-line interface to communicate with the Raft cluster.
+Supports sending commands (SET/GET), checking cluster status, and simulating partitions.
 """
 
 import grpc
 import sys
+import time
 from typing import Optional, Tuple
 
 import raft_pb2
@@ -12,191 +14,253 @@ import raft_pb2_grpc
 
 
 class RaftClusterClient:
-    """Client for interacting with Raft cluster"""
+    """Client to interact with a Raft cluster"""
     
-    def __init__(self, node_addresses: dict):
-        """
-        Initialize client with node addresses.
+    def __init__(self, base_port: int = 5000, num_nodes: int = 7):
+        self.base_port = base_port
+        self.num_nodes = num_nodes
+        self.current_leader: Optional[int] = None
+        self.timeout = 5  # seconds
+    
+    def _get_node_address(self, node_id: int) -> str:
+        """Get gRPC address for a node"""
+        return f"localhost:{self.base_port + node_id}"
+    
+    def _create_stub(self, node_id: int) -> Tuple[raft_pb2_grpc.RaftServiceStub, grpc.Channel]:
+        """Create a gRPC stub for a node"""
+        address = self._get_node_address(node_id)
+        channel = grpc.insecure_channel(address)
+        stub = raft_pb2_grpc.RaftServiceStub(channel)
+        return stub, channel
+    
+    def find_leader(self) -> Optional[int]:
+        """Find the current leader by querying all nodes"""
+        print("\n[*] Searching for cluster leader...")
         
-        Args:
-            node_addresses: Dict mapping node_id to (host, port)
-                           Example: {0: ("localhost", 5000), 1: ("localhost", 5001)}
-        """
-        self.node_addresses = node_addresses
-        self.stubs = {}
-        self.channels = {}
-        self._connect_to_nodes()
-    
-    def _connect_to_nodes(self):
-        """Create gRPC stubs for all nodes"""
-        for node_id, (host, port) in self.node_addresses.items():
+        # First pass: find node that claims to be leader (success=True)
+        for node_id in range(self.num_nodes):
             try:
-                channel = grpc.insecure_channel(f"{host}:{port}")
-                stub = raft_pb2_grpc.RaftServiceStub(channel)
-                self.stubs[node_id] = stub
-                self.channels[node_id] = channel
-            except Exception as e:
-                print(f"[WARNING] Could not connect to Node {node_id} at {host}:{port}: {e}")
-    
-    def send_command(self, command: str, target_node: Optional[int] = None) -> Tuple[bool, str]:
-        """
-        Send a command to the Raft cluster.
-        
-        Args:
-            command: Command string to send (e.g., "SET key value")
-            target_node: Optional specific node to send to. If None, try to find leader.
-        
-        Returns:
-            Tuple of (success: bool, message: str)
-        """
-        # If target_node not specified, try all nodes to find leader
-        nodes_to_try = [target_node] if target_node is not None else list(self.stubs.keys())
-        
-        for node_id in nodes_to_try:
-            if node_id not in self.stubs:
-                print(f"[ERROR] Node {node_id} not connected")
-                continue
-            
-            try:
-                request = raft_pb2.ClientRequestMessage(command=command)
-                response = self.stubs[node_id].ClientRequest(request, timeout=2.0)
+                stub, channel = self._create_stub(node_id)
+                request = raft_pb2.ClientRequestMessage(command="PING")
+                response = stub.ClientRequest(request, timeout=2)
+                channel.close()
                 
                 if response.success:
-                    return True, f"Command committed: {response.message}"
-                else:
-                    # Not leader, try next node or specified leader
-                    if response.leaderId:
-                        try:
-                            leader_id = int(response.leaderId)
-                            if leader_id in self.stubs:
-                                print(f"[INFO] Node {node_id} is not leader, trying node {leader_id}")
-                                continue
-                        except ValueError:
-                            pass
-                    
-                    print(f"[INFO] Node {node_id}: {response.message}")
-                    
-            except grpc.RpcError as e:
-                print(f"[WARNING] RPC error with Node {node_id}: {e}")
-            except Exception as e:
-                print(f"[WARNING] Error communicating with Node {node_id}: {e}")
+                    print(f"[✓] Found leader: Node {node_id}")
+                    self.current_leader = node_id
+                    return node_id
+            except:
+                pass
         
-        return False, "Failed to commit command to any node"
+        print("[✗] No leader found in cluster")
+        return None
     
-    def simulate_partition(self, node_id: int, blocked_nodes: list) -> bool:
+    def send_command(self, command: str, retry: bool = True) -> bool:
         """
-        Simulate network partition by blocking communication from a node.
-        
-        Args:
-            node_id: Node that should block communication
-            blocked_nodes: List of node IDs to block
-        
-        Returns:
-            True if successful, False otherwise
+        Send a command to the cluster leader.
+        Commands: SET <key> <value>, GET <key>, DELETE <key>
         """
-        if node_id not in self.stubs:
-            print(f"[ERROR] Node {node_id} not connected")
-            return False
+        if self.current_leader is None:
+            if not self.find_leader():
+                print("[ERROR] Cannot send command: No leader available")
+                return False
+        
+        print(f"\n[*] Sending command: '{command}' to Node {self.current_leader}")
         
         try:
-            request = raft_pb2.PartitionRequest(blockedNodeIds=blocked_nodes)
-            response = self.stubs[node_id].SimulatePartition(request, timeout=2.0)
+            stub, channel = self._create_stub(self.current_leader)
+            request = raft_pb2.ClientRequestMessage(command=command)
+            response = stub.ClientRequest(request, timeout=self.timeout)
+            channel.close()
             
             if response.success:
-                print(f"[INFO] {response.message}")
+                print(f"[✓] Command committed successfully!")
+                print(f"    Message: {response.message}")
+                if response.value:
+                    print(f"    Value: {response.value}")
                 return True
             else:
-                print(f"[ERROR] {response.message}")
+                print(f"[✗] Command failed: {response.message}")
+                if response.leaderId and response.leaderId.isdigit():
+                    new_leader = int(response.leaderId)
+                    if new_leader != self.current_leader and retry:
+                        print(f"[*] Redirecting to new leader: Node {new_leader}")
+                        self.current_leader = new_leader
+                        return self.send_command(command, retry=False)
                 return False
+                
+        except grpc.RpcError as e:
+            print(f"[ERROR] RPC failed: {e.code().name} - {e.details()}")
+            if retry:
+                print("[*] Attempting to find new leader...")
+                self.current_leader = None
+                if self.find_leader():
+                    return self.send_command(command, retry=False)
+            return False
         except Exception as e:
-            print(f"[ERROR] Failed to simulate partition: {e}")
+            print(f"[ERROR] Unexpected error: {str(e)}")
             return False
     
-    def heal_partition(self, node_id: int) -> bool:
-        """
-        Heal network partition by unblocking all peers.
-        
-        Args:
-            node_id: Node to unblock peers for
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        return self.simulate_partition(node_id, [])
-    
-    def get_cluster_status(self) -> None:
-        """Print status of all nodes in cluster"""
-        print("\n" + "="*80)
+    def check_cluster_status(self) -> dict:
+        """Check the status of all nodes in the cluster"""
+        print("\n" + "=" * 60)
         print("CLUSTER STATUS")
-        print("="*80)
+        print("=" * 60)
         
-        for node_id, stub in self.stubs.items():
+        status = {
+            "online": [],
+            "offline": [],
+            "leader": None
+        }
+        
+        for node_id in range(self.num_nodes):
             try:
-                # Try to get status via a heartbeat or other mechanism
-                # For now, just show connection status
-                print(f"Node {node_id}: Connected")
+                stub, channel = self._create_stub(node_id)
+                request = raft_pb2.ClientRequestMessage(command="STATUS")
+                response = stub.ClientRequest(request, timeout=2)
+                channel.close()
+                
+                if response.success:
+                    status["online"].append(node_id)
+                    status["leader"] = node_id
+                    print(f"  Node {node_id}: LEADER ★")
+                else:
+                    status["online"].append(node_id)
+                    leader_info = f"(leader: {response.leaderId})" if response.leaderId else ""
+                    print(f"  Node {node_id}: FOLLOWER")
+                    
+            except grpc.RpcError:
+                status["offline"].append(node_id)
+                print(f"  Node {node_id}: OFFLINE ✗")
             except Exception as e:
-                print(f"Node {node_id}: Error - {e}")
+                status["offline"].append(node_id)
+                print(f"  Node {node_id}: ERROR ({str(e)})")
         
-        print("="*80 + "\n")
+        print("-" * 60)
+        print(f"Online: {len(status['online'])} | Offline: {len(status['offline'])}")
+        print("=" * 60)
+        
+        return status
+
+
+def print_help():
+    """Print help message"""
+    print("""
+╔══════════════════════════════════════════════════════════════╗
+║               RAFT CLUSTER CLIENT - COMMANDS                  ║
+╠══════════════════════════════════════════════════════════════╣
+║  Data Commands:                                              ║
+║    set <key> <value>  - Store a key-value pair              ║
+║    get <key>          - Retrieve a value by key             ║
+║                                                              ║
+║  Cluster Commands:                                           ║
+║    status             - Show cluster status                  ║
+║                                                              ║
+║  Other:                                                      ║
+║    help               - Show this help message               ║
+║    exit/quit          - Exit the client                      ║
+╚══════════════════════════════════════════════════════════════╝
+""")
+
+
+def interactive_mode(client: RaftClusterClient):
+    """Run the client in interactive mode"""
+    print("\n" + "=" * 60)
+    print("  RAFT CLUSTER CLIENT - Interactive Mode")
+    print("  Type 'help' for available commands")
+    print("=" * 60)
     
-    def close(self):
-        """Close all connections"""
-        for channel in self.channels.values():
-            channel.close()
+    # Find leader on startup
+    client.find_leader()
+    
+    while True:
+        try:
+            user_input = input("\nraft> ").strip()
+            
+            if not user_input:
+                continue
+            
+            parts = user_input.split()
+            cmd = parts[0].lower()
+            
+            if cmd in ["exit", "quit", "q"]:
+                print("Goodbye!")
+                break
+            
+            elif cmd == "help":
+                print_help()
+            
+            elif cmd == "status":
+                client.check_cluster_status()
+            
+            elif cmd == "set":
+                if len(parts) < 3:
+                    print("[ERROR] Usage: set <key> <value>")
+                else:
+                    key = parts[1]
+                    value = " ".join(parts[2:])
+                    client.send_command(f"SET {key} {value}")
+            
+            elif cmd == "get":
+                if len(parts) < 2:
+                    print("[ERROR] Usage: get <key>")
+                else:
+                    client.send_command(f"GET {parts[1]}")
+            
+            else:
+                print(f"[ERROR] Unknown command: '{cmd}'. Type 'help' for available commands.")
+                
+        except KeyboardInterrupt:
+            print("\n\nInterrupted. Type 'exit' to quit.")
+        except EOFError:
+            print("\nGoodbye!")
+            break
 
 
-# ==============================================================================
-# Example Usage
-# ==============================================================================
+def main():
+    """Main entry point"""
+    # Default configuration
+    base_port = 5000
+    num_nodes = 7
+    
+    # Parse command line arguments
+    args = sys.argv[1:]
+    
+    if "--help" in args or "-h" in args:
+        print("Usage: python client.py [options]")
+        print("Options:")
+        print("  --port <port>    Base port number")
+        print("  --nodes <n>      Number of nodes in cluster (default: 7)")
+        print("  --command <cmd>  Execute a single command and exit")
+        print("  --help, -h       Show this help message")
+        return
+    
+    # Parse port
+    if "--port" in args:
+        idx = args.index("--port")
+        if idx + 1 < len(args):
+            base_port = int(args[idx + 1])
+    
+    # Parse nodes
+    if "--nodes" in args:
+        idx = args.index("--nodes")
+        if idx + 1 < len(args):
+            num_nodes = int(args[idx + 1])
+    
+    client = RaftClusterClient(base_port=base_port, num_nodes=num_nodes)
+    
+    # Single command mode
+    if "--command" in args:
+        idx = args.index("--command")
+        if idx + 1 < len(args):
+            command = " ".join(args[idx + 1:])
+            client.find_leader()
+            client.send_command(command)
+            return
+    
+    # Interactive mode
+    interactive_mode(client)
+
 
 if __name__ == "__main__":
-    # Create client for 5-node cluster running on localhost
-    node_addresses = {
-        0: ("localhost", 5000),
-        1: ("localhost", 5001),
-        2: ("localhost", 5002),
-        3: ("localhost", 5003),
-        4: ("localhost", 5004),
-    }
-    
-    client = RaftClusterClient(node_addresses)
-    
-    print("""
-    ╔════════════════════════════════════════════════════════════════╗
-    ║         RAFT CLUSTER CLIENT - USAGE EXAMPLES                   ║
-    ╚════════════════════════════════════════════════════════════════╝
-    """)
-    
-    # Example 1: Send command to cluster (finds leader automatically)
-    print("\n1. Sending command to cluster (finds leader automatically):")
-    success, msg = client.send_command("SET mykey myvalue")
-    print(f"   Result: {msg}\n")
-    
-    # Example 2: Send another command
-    print("2. Sending another command:")
-    success, msg = client.send_command("GET mykey")
-    print(f"   Result: {msg}\n")
-    
-    # Example 3: Simulate partition
-    print("3. Simulating network partition (Node 4 blocks 0,1,2):")
-    client.simulate_partition(4, [0, 1, 2])
-    print()
-    
-    # Example 4: Try command during partition (will fail on minority)
-    print("4. Trying to send command during partition:")
-    success, msg = client.send_command("SET key2 value2")
-    print(f"   Result: {msg}\n")
-    
-    # Example 5: Heal partition
-    print("5. Healing partition:")
-    client.heal_partition(4)
-    print()
-    
-    # Example 6: Try command again after healing
-    print("6. Trying to send command after healing partition:")
-    success, msg = client.send_command("SET key3 value3")
-    print(f"   Result: {msg}\n")
-    
-    client.close()
-    print("Client closed.")
+    main()

@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nraft.proto\x12\x04raft\"[\n\x0bVoteRequest\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x13\n\x0b\x63\x61ndidateId\x18\x02 \x01(\x05\x12\x14\n\x0clastLogIndex\x18\x03 \x01(\x05\x12\x13\n\x0blastLogTerm\x18\x04 \x01(\x05\"1\n\x0cVoteResponse\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x13\n\x0bvoteGranted\x18\x02 \x01(\x08\"\x98\x01\n\x14\x41ppendEntriesRequest\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x10\n\x08leaderId\x18\x02 \x01(\x05\x12\x14\n\x0cprevLogIndex\x18\x03 \x01(\x05\x12\x13\n\x0bprevLogTerm\x18\x04 \x01(\x05\x12\x1f\n\x07\x65ntries\x18\x05 \x03(\x0b\x32\x0e.raft.LogEntry\x12\x14\n\x0cleaderCommit\x18\x06 \x01(\x05\"L\n\x15\x41ppendEntriesResponse\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x14\n\x0clastLogIndex\x18\x03 \x01(\x05\"\'\n\x14\x43lientRequestMessage\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\"K\n\x15\x43lientRequestResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x10\n\x08leaderId\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"*\n\x10PartitionRequest\x12\x16\n\x0e\x62lockedNodeIds\x18\x01 \x03(\x05\"5\n\x11PartitionResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\")\n\x08LogEntry\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x0f\n\x07\x63ommand\x18\x02 \x01(\t2\x9d\x02\n\x0bRaftService\x12\x34\n\x0bRequestVote\x12\x11.raft.VoteRequest\x1a\x12.raft.VoteResponse\x12H\n\rAppendEntries\x12\x1a.raft.AppendEntriesRequest\x1a\x1b.raft.AppendEntriesResponse\x12H\n\rClientRequest\x12\x1a.raft.ClientRequestMessage\x1a\x1b.raft.ClientRequestResponse\x12\x44\n\x11SimulatePartition\x12\x16.raft.PartitionRequest\x1a\x17.raft.PartitionResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nraft.proto\x12\x04raft\"[\n\x0bVoteRequest\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x13\n\x0b\x63\x61ndidateId\x18\x02 \x01(\x05\x12\x14\n\x0clastLogIndex\x18\x03 \x01(\x05\x12\x13\n\x0blastLogTerm\x18\x04 \x01(\x05\"1\n\x0cVoteResponse\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x13\n\x0bvoteGranted\x18\x02 \x01(\x08\"\x98\x01\n\x14\x41ppendEntriesRequest\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x10\n\x08leaderId\x18\x02 \x01(\x05\x12\x14\n\x0cprevLogIndex\x18\x03 \x01(\x05\x12\x13\n\x0bprevLogTerm\x18\x04 \x01(\x05\x12\x1f\n\x07\x65ntries\x18\x05 \x03(\x0b\x32\x0e.raft.LogEntry\x12\x14\n\x0cleaderCommit\x18\x06 \x01(\x05\"L\n\x15\x41ppendEntriesResponse\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x14\n\x0clastLogIndex\x18\x03 \x01(\x05\"\'\n\x14\x43lientRequestMessage\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\"Z\n\x15\x43lientRequestResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x10\n\x08leaderId\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\r\n\x05value\x18\x04 \x01(\t\"*\n\x10PartitionRequest\x12\x16\n\x0e\x62lockedNodeIds\x18\x01 \x03(\x05\"5\n\x11PartitionResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\")\n\x08LogEntry\x12\x0c\n\x04term\x18\x01 \x01(\x05\x12\x0f\n\x07\x63ommand\x18\x02 \x01(\t2\x9d\x02\n\x0bRaftService\x12\x34\n\x0bRequestVote\x12\x11.raft.VoteRequest\x1a\x12.raft.VoteResponse\x12H\n\rAppendEntries\x12\x1a.raft.AppendEntriesRequest\x1a\x1b.raft.AppendEntriesResponse\x12H\n\rClientRequest\x12\x1a.raft.ClientRequestMessage\x1a\x1b.raft.ClientRequestResponse\x12\x44\n\x11SimulatePartition\x12\x16.raft.PartitionRequest\x1a\x17.raft.PartitionResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -42,13 +42,13 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_CLIENTREQUESTMESSAGE']._serialized_start=397
   _globals['_CLIENTREQUESTMESSAGE']._serialized_end=436
   _globals['_CLIENTREQUESTRESPONSE']._serialized_start=438
-  _globals['_CLIENTREQUESTRESPONSE']._serialized_end=513
-  _globals['_PARTITIONREQUEST']._serialized_start=515
-  _globals['_PARTITIONREQUEST']._serialized_end=557
-  _globals['_PARTITIONRESPONSE']._serialized_start=559
-  _globals['_PARTITIONRESPONSE']._serialized_end=612
-  _globals['_LOGENTRY']._serialized_start=614
-  _globals['_LOGENTRY']._serialized_end=655
-  _globals['_RAFTSERVICE']._serialized_start=658
-  _globals['_RAFTSERVICE']._serialized_end=943
+  _globals['_CLIENTREQUESTRESPONSE']._serialized_end=528
+  _globals['_PARTITIONREQUEST']._serialized_start=530
+  _globals['_PARTITIONREQUEST']._serialized_end=572
+  _globals['_PARTITIONRESPONSE']._serialized_start=574
+  _globals['_PARTITIONRESPONSE']._serialized_end=627
+  _globals['_LOGENTRY']._serialized_start=629
+  _globals['_LOGENTRY']._serialized_end=670
+  _globals['_RAFTSERVICE']._serialized_start=673
+  _globals['_RAFTSERVICE']._serialized_end=958
 # @@protoc_insertion_point(module_scope)

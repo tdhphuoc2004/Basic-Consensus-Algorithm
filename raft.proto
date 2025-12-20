@@ -45,6 +45,7 @@ message ClientRequestResponse {
     bool success = 1;        // True if committed, False if not leader
     string leaderId = 2;     // ID of leader (if not leader)
     string message = 3;      // Status message
+    string value = 4;        // Result value (for GET commands or confirmation)
 }
 
 message PartitionRequest {

@@ -1,14 +1,14 @@
 """
 Raft Client Interaction Module
 Handles client requests and network partition simulation.
+Single Responsibility: Client request handling only.
 """
 
-import logging
+import time
+import threading
 
 import raft_pb2
 from raft_state import NodeState, LogEntry
-
-logger = logging.getLogger(__name__)
 
 
 class ClientManager:
@@ -16,22 +16,13 @@ class ClientManager:
     
     def __init__(self, node):
         self.node = node
+        self.commit_timeout = 10
+        self.retry_interval = 0.05
     
     def handle_client_request(
         self, request: raft_pb2.ClientRequestMessage, context
     ) -> raft_pb2.ClientRequestResponse:
-        """
-        Handle client request to append command to log.
-        
-        FLOW:
-        1. If not leader, reject and return leader ID
-        2. If leader, append command to log
-        3. Replicate to followers via AppendEntries
-        4. Wait until entry is COMMITTED (replicated to majority)
-        5. Return success to client
-        
-        IMPORTANT: Wait for COMMIT, not just replication!
-        """
+        """Handle client request to append command to log."""
         response = raft_pb2.ClientRequestResponse()
 
         with self.node.lock:
@@ -41,85 +32,112 @@ class ClientManager:
                 response.message = f"Not leader. Current term: {self.node.current_term}"
                 return response
 
-            # Leader: append command to log
             new_entry = LogEntry(term=self.node.current_term, command=request.command)
             self.node.log.append(new_entry)
             new_index = len(self.node.log) - 1
-
-            msg = (
-                f"[TERM {self.node.current_term}] Leader Node {self.node.node_id} received "
-                f"client request: '{request.command}' at index {new_index}"
+            
+            self.node.storage.save_persistent_state(
+                self.node.current_term, self.node.voted_for, self.node.log
             )
-            print(msg)
-            logger.info(msg)
 
-        # Replicate to followers asynchronously
+        self._reset_replication_indices()
+        self._trigger_replication()
+
+        return self._wait_for_commit(new_index, request.command, response)
+    
+    def _reset_replication_indices(self):
+        """Reset next_index and match_index for all followers."""
+        with self.node.lock:
+            for peer in self.node.peers:
+                self.node.next_index[peer] = 0
+                self.node.match_index[peer] = -1
+    
+    def _trigger_replication(self):
+        """Spawn replication threads for all peers."""
         from raft_replication import ReplicationManager
         repl_mgr = ReplicationManager(self.node)
-        import threading
+        
         for peer in self.node.peers:
             thread = threading.Thread(
-                target=repl_mgr.send_append_entries, args=(peer, new_index)
+                target=repl_mgr.send_append_entries, args=(peer, -1)
             )
             thread.daemon = True
             thread.start()
-
-        # Wait until this entry is committed
-        import time
+    
+    def _wait_for_commit(
+        self, new_index: int, command: str, response: raft_pb2.ClientRequestResponse
+    ) -> raft_pb2.ClientRequestResponse:
+        """Wait until the entry is committed or timeout."""
+        from raft_replication import ReplicationManager
+        repl_mgr = ReplicationManager(self.node)
+        
         start_time = time.time()
+        last_replication_attempt = start_time
+        
         while True:
             with self.node.lock:
                 if self.node.commit_index >= new_index and self.node.state == NodeState.LEADER:
-                    # Entry is committed!
+                    command_result = self._apply_and_get_result(new_index)
+                    self.node.storage.save_state_machine(self.node.state_machine.get_data())
+                    
                     response.success = True
                     response.message = f"Command committed at index {new_index}"
-                    msg = (
-                        f"[TERM {self.node.current_term}] Leader Node {self.node.node_id} "
-                        f"committed command: '{request.command}'"
-                    )
-                    print(msg)
-                    logger.info(msg)
+                    response.value = command_result
                     return response
 
                 if self.node.state != NodeState.LEADER:
-                    # We lost leadership
                     response.success = False
                     response.message = "Lost leadership before commit"
                     return response
 
-            time.sleep(0.05)
-
-            # Timeout after 10 seconds
-            if time.time() - start_time > 10:
+            if time.time() - start_time > self.commit_timeout:
                 response.success = False
                 response.message = "Timeout waiting for commit"
                 return response
+            
+            current_time = time.time()
+            if current_time - last_replication_attempt > self.retry_interval:
+                for peer in self.node.peers:
+                    thread = threading.Thread(
+                        target=repl_mgr.send_append_entries, args=(peer, -1)
+                    )
+                    thread.daemon = True
+                    thread.start()
+                last_replication_attempt = current_time
+            
+            time.sleep(0.01)
+    
+    def _apply_and_get_result(self, target_index: int) -> str:
+        """Apply committed entries and return result of target command."""
+        command_result = ""
+        
+        while self.node.last_applied < self.node.commit_index:
+            self.node.last_applied += 1
+            entry = self.node.log[self.node.last_applied]
+            success, result = self.node.state_machine.apply_command(entry.command)
+            
+            if self.node.last_applied == target_index:
+                command_result = result
+        
+        if not command_result and target_index < len(self.node.log):
+            entry = self.node.log[target_index]
+            _, command_result = self.node.state_machine.apply_command(entry.command)
+        
+        return command_result
     
     def handle_simulate_partition(
         self, request: raft_pb2.PartitionRequest, context
     ) -> raft_pb2.PartitionResponse:
-        """
-        Simulate network partition by blocking communication with specific nodes.
-        
-        PARTITION SIMULATION:
-        Add node IDs to blocked_peers set. All outgoing RPCs check this set.
-        """
+        """Simulate network partition by blocking communication with specific nodes."""
         response = raft_pb2.PartitionResponse()
         
         with self.node.lock:
             self.node.blocked_peers = set(request.blockedNodeIds)
-            msg = (
-                f"[TERM {self.node.current_term}] Node {self.node.node_id} blocking peers: "
-                f"{self.node.blocked_peers}"
-            )
-            print(msg)
-            logger.info(msg)
-
             response.success = True
             response.message = f"Blocked {len(self.node.blocked_peers)} peers"
 
         return response
     
     def _find_leader(self) -> int:
-        """Best effort to find leader ID (heuristic for demo)"""
+        """Best effort to find leader ID."""
         return max(self.node.peers) if self.node.peers else None
