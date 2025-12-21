@@ -76,54 +76,92 @@ def format_node_state(node_state: Dict) -> str:
 
 
 def print_snapshot(nodes, title: str = "CLUSTER STATE", reason: str = ""):
-    """Print current state of all nodes."""
+    """Print current state of all nodes (optimized for minimal lock time)."""
     import time
     
     if not nodes:
         print_colored("[ERROR] No cluster running", Colors.FAIL)
         return
     
+    # Collect all data first with minimal lock time
+    current_time = time.time()
+    node_data = []
+    
+    for node in nodes:
+        try:
+            # Use timeout to avoid blocking on stopped nodes
+            acquired = node.lock.acquire(timeout=0.1)
+            if acquired:
+                try:
+                    node_data.append({
+                        "node_id": node.node_id,
+                        "state": node.state.value.upper(),
+                        "term": node.current_term,
+                        "log_len": len(node.log),
+                        "commit_idx": node.commit_index,
+                        "data_size": node.state_machine.get_size() if hasattr(node, 'state_machine') else 0,
+                        "timeout": node.election_timeout,
+                    })
+                finally:
+                    node.lock.release()
+            else:
+                # Could not acquire lock in time, read without lock (best effort)
+                node_data.append({
+                    "node_id": getattr(node, 'node_id', '?'),
+                    "state": getattr(node.state, 'value', 'BUSY').upper(),
+                    "term": getattr(node, 'current_term', 0),
+                    "log_len": len(getattr(node, 'log', [])),
+                    "commit_idx": getattr(node, 'commit_index', 0),
+                    "data_size": 0,
+                    "timeout": getattr(node, 'election_timeout', 0),
+                })
+        except Exception:
+            # Node may be in inconsistent state during kill/revive
+            node_data.append({
+                "node_id": getattr(node, 'node_id', '?'),
+                "state": "UNKNOWN",
+                "term": 0,
+                "log_len": 0,
+                "commit_idx": 0,
+                "data_size": 0,
+                "timeout": 0,
+            })
+    
+    # Now print without holding any locks
     print("\n" + "="*120)
     print(f"{title}")
     if reason:
         print(f"→ {reason}")
     print("="*120)
     
-    current_time = time.time()
-    
-    for node in nodes:
-        state = node.get_state()
-        node_id = state["node_id"]
-        state_str = state["state"].upper()
-        term = state["term"]
-        log_len = state["log_length"]
-        commit_idx = state["commit_index"]
-        data_size = state.get("state_machine_size", 0)
+    for data in node_data:
+        state_str = data["state"]
+        term = data["term"]
         
         if state_str == "LEADER":
             symbol = "👑"
             status = f"LEADER (term={term})"
+            timeout_str = "LEADING (no timeout)"
         elif state_str == "CANDIDATE":
             symbol = "🔔"
             status = f"CANDIDATE (term={term})"
+            timeout_remain = (data["timeout"] - current_time) * 1000
+            timeout_str = f"expires in {timeout_remain:.0f}ms" if timeout_remain > 0 else "EXPIRED"
         elif state_str == "STOPPED":
             symbol = "💀"
             status = "STOPPED"
+            timeout_str = "DEAD"
+        elif state_str == "UNKNOWN":
+            symbol = "❓"
+            status = "UNKNOWN"
+            timeout_str = "N/A"
         else:
             symbol = "👤"
             status = f"FOLLOWER (term={term})"
+            timeout_remain = (data["timeout"] - current_time) * 1000
+            timeout_str = f"expires in {timeout_remain:.0f}ms" if timeout_remain > 0 else "EXPIRED"
         
-        with node.lock:
-            timeout_abs = node.election_timeout
-            timeout_remain = (timeout_abs - current_time) * 1000
-        
-        timeout_str = f"expires in {timeout_remain:.0f}ms" if timeout_remain > 0 else "EXPIRED"
-        if state_str == "LEADER":
-            timeout_str = "LEADING (no timeout)"
-        elif state_str == "STOPPED":
-            timeout_str = "DEAD"
-        
-        print(f"  {symbol} Node {node_id}: {status:<18} | Log={log_len:2d} Commit={commit_idx:2d} Data={data_size:2d} | Timeout: {timeout_str}")
+        print(f"  {symbol} Node {data['node_id']}: {status:<18} | Log={data['log_len']:2d} Commit={data['commit_idx']:2d} Data={data['data_size']:2d} | Timeout: {timeout_str}")
     
     print("="*120 + "\n")
 
@@ -145,17 +183,24 @@ def print_pre_election_timeouts(nodes):
     
     # Collect timeout info for all ACTIVE nodes (skip STOPPED and negative)
     for node in nodes:
-        # Skip stopped nodes
-        node_state = node.get_state()
-        if node_state["state"] == "STOPPED":
-            continue
-        
-        with node.lock:
-            timeout_abs = node.election_timeout
-            timeout_remain = (timeout_abs - current_time) * 1000  # Convert to ms
-        
-        # Skip nodes with negative timeout (already expired/dead)
-        if timeout_remain < 0:
+        try:
+            # Use timeout to avoid blocking
+            acquired = node.lock.acquire(timeout=0.05)
+            if not acquired:
+                continue
+            try:
+                # Skip stopped nodes
+                if node.state.value == "stopped":
+                    continue
+                timeout_abs = node.election_timeout
+                timeout_remain = (timeout_abs - current_time) * 1000  # Convert to ms
+            finally:
+                node.lock.release()
+            
+            # Skip nodes with negative timeout (already expired/dead)
+            if timeout_remain < 0:
+                continue
+        except Exception:
             continue
         
         timeout_list.append({

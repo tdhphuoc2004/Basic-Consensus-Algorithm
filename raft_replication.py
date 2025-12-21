@@ -43,6 +43,9 @@ class ReplicationManager:
             elif self.node.state != NodeState.FOLLOWER:
                 self.node.state = NodeState.FOLLOWER
 
+            # Track the known leader ID from this AppendEntries
+            self.node.known_leader_id = request.leaderId
+            
             self.node._reset_election_timeout()
             self.node.last_heartbeat_time = time.time()
 
@@ -109,11 +112,20 @@ class ReplicationManager:
             )
             stub = raft_pb2_grpc.RaftServiceStub(channel)
 
-            with self.node.lock:
+            acquired = self.node.lock.acquire(timeout=0.2)
+            if not acquired:
+                channel.close()
+                return
+            try:
                 if self.node.state != NodeState.LEADER:
                     channel.close()
                     return
 
+                # Initialize next_index if peer doesn't have it yet
+                if peer_id not in self.node.next_index:
+                    self.node.next_index[peer_id] = len(self.node.log)
+                    self.node.match_index[peer_id] = -1
+                
                 next_idx = self.node.next_index[peer_id]
                 entries_to_send = self.node.log[next_idx:] if up_to_index == -1 or up_to_index >= next_idx else []
                 
@@ -133,21 +145,28 @@ class ReplicationManager:
                     entries=pb_entries,
                     leaderCommit=self.node.commit_index,
                 )
+            finally:
+                self.node.lock.release()
 
             response = stub.AppendEntries(request, timeout=self.node.config.rpc_timeout)
 
-            with self.node.lock:
-                if response.term > self.node.current_term:
-                    from raft_election import ElectionManager
-                    ElectionManager(self.node).become_follower(response.term)
-                elif self.node.state == NodeState.LEADER:
-                    if response.success:
-                        new_match_index = next_idx + len(entries_to_send) - 1
-                        self.node.match_index[peer_id] = new_match_index
-                        self.node.next_index[peer_id] = new_match_index + 1
-                        self._update_commit_index()
-                    else:
-                        self.node.next_index[peer_id] = max(0, self.node.next_index[peer_id] - 1)
+            # Keep retrying lock acquisition - this update is critical
+            acquired = self.node.lock.acquire(timeout=1.0)
+            if acquired:
+                try:
+                    if response.term > self.node.current_term:
+                        from raft_election import ElectionManager
+                        ElectionManager(self.node).become_follower(response.term)
+                    elif self.node.state == NodeState.LEADER:
+                        if response.success:
+                            new_match_index = next_idx + len(entries_to_send) - 1
+                            self.node.match_index[peer_id] = new_match_index
+                            self.node.next_index[peer_id] = new_match_index + 1
+                            self._update_commit_index()
+                        else:
+                            self.node.next_index[peer_id] = max(0, self.node.next_index[peer_id] - 1)
+                finally:
+                    self.node.lock.release()
 
             channel.close()
         except Exception:
@@ -162,12 +181,14 @@ class ReplicationManager:
     
     def _update_commit_index(self):
         """Update commitIndex if a new entry is replicated to majority."""
-        quorum = (len(self.node.peers) + 1) // 2 + 1
+        # Use cluster_size for quorum, not current peers length
+        # This ensures quorum is based on total cluster, not just alive nodes
+        quorum = (self.node.cluster_size // 2) + 1
 
         for idx in range(self.node.commit_index + 1, len(self.node.log)):
-            count = 1
+            count = 1  # Count self
             for peer_id in self.node.peers:
-                if self.node.match_index.get(peer_id, 0) >= idx:
+                if self.node.match_index.get(peer_id, -1) >= idx:
                     count += 1
 
             if count >= quorum and self.node.log[idx].term == self.node.current_term:

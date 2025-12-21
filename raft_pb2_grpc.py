@@ -54,6 +54,16 @@ class RaftServiceStub(object):
                 request_serializer=raft__pb2.PartitionRequest.SerializeToString,
                 response_deserializer=raft__pb2.PartitionResponse.FromString,
                 _registered_method=True)
+        self.HealPartition = channel.unary_unary(
+                '/raft.RaftService/HealPartition',
+                request_serializer=raft__pb2.HealPartitionRequest.SerializeToString,
+                response_deserializer=raft__pb2.HealPartitionResponse.FromString,
+                _registered_method=True)
+        self.GetPartitionStatus = channel.unary_unary(
+                '/raft.RaftService/GetPartitionStatus',
+                request_serializer=raft__pb2.PartitionStatusRequest.SerializeToString,
+                response_deserializer=raft__pb2.PartitionStatusResponse.FromString,
+                _registered_method=True)
 
 
 class RaftServiceServicer(object):
@@ -83,6 +93,18 @@ class RaftServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def HealPartition(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetPartitionStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_RaftServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -105,6 +127,16 @@ def add_RaftServiceServicer_to_server(servicer, server):
                     servicer.SimulatePartition,
                     request_deserializer=raft__pb2.PartitionRequest.FromString,
                     response_serializer=raft__pb2.PartitionResponse.SerializeToString,
+            ),
+            'HealPartition': grpc.unary_unary_rpc_method_handler(
+                    servicer.HealPartition,
+                    request_deserializer=raft__pb2.HealPartitionRequest.FromString,
+                    response_serializer=raft__pb2.HealPartitionResponse.SerializeToString,
+            ),
+            'GetPartitionStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPartitionStatus,
+                    request_deserializer=raft__pb2.PartitionStatusRequest.FromString,
+                    response_serializer=raft__pb2.PartitionStatusResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -215,6 +247,60 @@ class RaftService(object):
             '/raft.RaftService/SimulatePartition',
             raft__pb2.PartitionRequest.SerializeToString,
             raft__pb2.PartitionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def HealPartition(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftService/HealPartition',
+            raft__pb2.HealPartitionRequest.SerializeToString,
+            raft__pb2.HealPartitionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPartitionStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftService/GetPartitionStatus',
+            raft__pb2.PartitionStatusRequest.SerializeToString,
+            raft__pb2.PartitionStatusResponse.FromString,
             options,
             channel_credentials,
             insecure,

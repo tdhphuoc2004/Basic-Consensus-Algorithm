@@ -27,8 +27,8 @@ class LogEntry:
 
 @dataclass
 class NodeConfig:
-    """Configuration for Raft nodes."""
-    election_timeout_min: float = 1.5
-    election_timeout_max: float = 3.0
-    heartbeat_interval: float = 0.5
-    rpc_timeout: float = 1.0
+    """Configuration for Raft nodes (all times in seconds)."""
+    election_timeout_min: float = 1.5   # seconds
+    election_timeout_max: float = 3.0   # seconds
+    heartbeat_interval: float = 0.5     # seconds - must be << election timeout
+    rpc_timeout: float = 0.4            # seconds             

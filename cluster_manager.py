@@ -12,11 +12,11 @@ from raft_state import NodeState
 
 
 class Config:
-    """Global configuration"""
-    ELECTION_TIMEOUT_MIN = 2000
-    ELECTION_TIMEOUT_MAX = 8000
-    HEARTBEAT_INTERVAL = 0.2
-    RPC_TIMEOUT = 0.5
+    """Global configuration (all times in seconds)"""
+    ELECTION_TIMEOUT_MIN = 1.5    # seconds
+    ELECTION_TIMEOUT_MAX = 3.0    # seconds
+    HEARTBEAT_INTERVAL = 0.5      # seconds - must be << election timeout
+    RPC_TIMEOUT = 0.4             # seconds
     MONITOR_INTERVAL = 0.3
 
 
@@ -67,7 +67,6 @@ class ClusterManager:
             time.sleep(0.05)
         
         print(f"Cluster created with {self.num_nodes} nodes")
-        time.sleep(1)
         
         print("Waiting for first election...")
         wait_for_leader(self.nodes)
@@ -89,7 +88,6 @@ class ClusterManager:
         
         self.nodes.clear()
         self.num_nodes = 0
-        time.sleep(1)
         print("Cluster destroyed")
         return True
     
@@ -124,7 +122,6 @@ class ClusterManager:
             print("Waiting for new leader election...")
             wait_for_leader(self.nodes, exclude_id=node_id)
         
-        time.sleep(3)
         return True
     
     def revive_node(self, node_id: int) -> bool:
@@ -153,12 +150,17 @@ class ClusterManager:
                     other_node.next_index[node_id] = 0
                     other_node.match_index[node_id] = -1
         
+        # Restart the gRPC server on the same port
+        node.restart_server(port=5000 + node_id)
+        
         with node.lock:
             node.state = NodeState.FOLLOWER
             node.voted_for = None
             node.votes_received = set()
-            jitter = random.uniform(10000, 15000) / 1000
-            node.election_timeout = time.time() + jitter
+            # Restore peers list to include all other alive nodes
+            node.peers = [n.node_id for n in self.nodes 
+                         if n.node_id != node_id and n.get_state()["state"] != "stopped"]
+            node._reset_election_timeout()
         
         print(f"Node {node_id} revived")
         

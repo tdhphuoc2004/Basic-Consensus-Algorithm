@@ -28,16 +28,18 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
         """Initialize a Raft node."""
         self.node_id = node_id
         self.peers = [p for p in peers if p != node_id]
+        self.cluster_size = len(peers)  # Total cluster size (including self) for quorum calculation
         self.config = config or NodeConfig()
         self.storage = RaftStorage(node_id)
         self.current_term, self.voted_for, self.log = self.storage.load_persistent_state()
-        self.commit_index = 0
-        self.last_applied = 0
+        self.commit_index = -1  # -1 means nothing committed yet
+        self.last_applied = -1  # -1 means nothing applied yet
         self.state = NodeState.FOLLOWER
         self.votes_received: Set[int] = set()
         self.blocked_peers: Set[int] = set()
         self.next_index: Dict[int, int] = {}
         self.match_index: Dict[int, int] = {}
+        self.known_leader_id: Optional[int] = None  # Track known leader from heartbeats
         self.lock = threading.RLock()
         self.election_event = threading.Event()
         self.election_timeout = 0
@@ -50,18 +52,22 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
         self.state_machine = KeyValueStore(node_id)
 
     def _reset_election_timeout(self):
-        """Reset election timeout to a random value."""
-        jitter = random.uniform(
-            self.config.election_timeout_min / 1000,
-            self.config.election_timeout_max / 1000
+        """Reset election timeout to a random value (Raft paper Section 5.2).
+        
+        Election timeout is randomly chosen from [election_timeout_min, election_timeout_max] seconds.
+        This randomization reduces the chance of split votes.
+        """
+        timeout_sec = random.uniform(
+            self.config.election_timeout_min,
+            self.config.election_timeout_max
         )
-        self.election_timeout = time.time() + jitter
+        self.election_timeout = time.time() + timeout_sec
 
     def _init_leader_state(self):
         """Initialize leader-specific state."""
         for peer in self.peers:
             self.next_index[peer] = len(self.log)
-            self.match_index[peer] = 0
+            self.match_index[peer] = -1  # -1 means nothing matched yet
         
         if len(self.log) > 0 and self.log[-1].term < self.current_term:
             noop_entry = LogEntry(term=self.current_term, command="NO-OP")
@@ -82,6 +88,12 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
     def SimulatePartition(self, request: raft_pb2.PartitionRequest, context) -> raft_pb2.PartitionResponse:
         return self.client_mgr.handle_simulate_partition(request, context)
 
+    def HealPartition(self, request: raft_pb2.HealPartitionRequest, context) -> raft_pb2.HealPartitionResponse:
+        return self.client_mgr.handle_heal_partition(request, context)
+
+    def GetPartitionStatus(self, request: raft_pb2.PartitionStatusRequest, context) -> raft_pb2.PartitionStatusResponse:
+        return self.client_mgr.handle_partition_status(request, context)
+
     def _is_peer_blocked(self, peer_id: int) -> bool:
         """Check if a peer is blocked (network partition simulation)."""
         with self.lock:
@@ -91,14 +103,34 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
         """Main election loop managing state transitions."""
         while True:
             try:
-                with self.lock:
-                    if self.state == NodeState.STOPPED:
-                        time.sleep(0.1)
-                        continue
+                # Check if stopped without holding lock long
+                is_stopped = False
+                acquired = self.lock.acquire(timeout=0.05)
+                if acquired:
+                    try:
+                        is_stopped = (self.state == NodeState.STOPPED)
+                    finally:
+                        self.lock.release()
+                else:
+                    # Could not acquire lock, skip this iteration
+                    time.sleep(0.05)
+                    continue
                 
-                with self.lock:
+                if is_stopped:
+                    # Sleep longer when stopped to reduce CPU and lock contention
+                    time.sleep(0.5)
+                    continue
+                
+                # Use timeout for main lock acquisition too
+                acquired = self.lock.acquire(timeout=0.1)
+                if not acquired:
+                    time.sleep(0.05)
+                    continue
+                try:
                     current_state = self.state
                     election_timeout_reached = time.time() >= self.election_timeout
+                finally:
+                    self.lock.release()
 
                 if current_state == NodeState.FOLLOWER and election_timeout_reached:
                     self.election_mgr.become_candidate()
@@ -119,8 +151,12 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                     if time.time() - self.last_heartbeat_time >= self.config.heartbeat_interval:
                         for peer in self.peers:
                             threading.Thread(target=self.replication_mgr.send_append_entries, args=(peer,), daemon=True).start()
-                        with self.lock:
-                            self.last_heartbeat_time = time.time()
+                        acquired = self.lock.acquire(timeout=0.1)
+                        if acquired:
+                            try:
+                                self.last_heartbeat_time = time.time()
+                            finally:
+                                self.lock.release()
 
                 time.sleep(0.05)
             except Exception:
@@ -128,7 +164,23 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
 
     def get_state(self) -> Dict:
         """Get current state of the node for monitoring."""
-        with self.lock:
+        # Use timeout to avoid blocking when node is busy
+        acquired = self.lock.acquire(timeout=0.1)
+        if not acquired:
+            # Return best-effort state without lock
+            return {
+                "node_id": self.node_id,
+                "state": getattr(self.state, 'value', 'busy'),
+                "term": getattr(self, 'current_term', 0),
+                "voted_for": None,
+                "votes_received": 0,
+                "is_leader": False,
+                "log_length": 0,
+                "commit_index": -1,
+                "last_applied": -1,
+                "state_machine_size": 0,
+            }
+        try:
             return {
                 "node_id": self.node_id,
                 "state": self.state.value,
@@ -141,6 +193,8 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                 "last_applied": self.last_applied,
                 "state_machine_size": self.state_machine.get_size(),
             }
+        finally:
+            self.lock.release()
 
     def start(self, port: int = None):
         """Start the Raft node server and election loop."""
@@ -164,3 +218,15 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
             server.stop(0)
         except Exception:
             pass
+
+    def restart_server(self, port: int = None):
+        """Restart the gRPC server after a node is revived."""
+        if port is None:
+            port = 5000 + self.node_id
+
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+        raft_pb2_grpc.add_RaftServiceServicer_to_server(self, server)
+        server.add_insecure_port(f"127.0.0.1:{port}")
+        server.start()
+        
+        self.grpc_server = server

@@ -6,6 +6,8 @@ service RaftService {
     rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
     rpc ClientRequest (ClientRequestMessage) returns (ClientRequestResponse);
     rpc SimulatePartition (PartitionRequest) returns (PartitionResponse);
+    rpc HealPartition (HealPartitionRequest) returns (HealPartitionResponse);
+    rpc GetPartitionStatus (PartitionStatusRequest) returns (PartitionStatusResponse);
 }
 
 
@@ -55,6 +57,25 @@ message PartitionRequest {
 message PartitionResponse {
     bool success = 1;
     string message = 2;
+}
+
+message HealPartitionRequest {
+    repeated int32 healNodeIds = 1; // Node IDs to restore communication with (empty = heal all)
+}
+
+message HealPartitionResponse {
+    bool success = 1;
+    string message = 2;
+    repeated int32 healedNodeIds = 3; // Node IDs that were healed
+}
+
+message PartitionStatusRequest {
+}
+
+message PartitionStatusResponse {
+    bool success = 1;
+    repeated int32 blockedNodeIds = 2; // Currently blocked node IDs
+    string message = 3;
 }
 
 message LogEntry {

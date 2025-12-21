@@ -19,8 +19,11 @@ class ElectionManager:
         self.node = node
     
     def become_candidate(self):
-        """Transition to CANDIDATE state and start election."""
-        with self.node.lock:
+        """Transition to CANDIDATE state and start election (Raft paper Section 5.2)."""
+        acquired = self.node.lock.acquire(timeout=0.2)
+        if not acquired:
+            return
+        try:
             self.node.state = NodeState.CANDIDATE
             self.node.current_term += 1
             self.node.voted_for = self.node.node_id
@@ -29,10 +32,15 @@ class ElectionManager:
             self.node.storage.save_persistent_state(
                 self.node.current_term, self.node.voted_for, self.node.log
             )
+        finally:
+            self.node.lock.release()
     
     def become_follower(self, term: int):
         """Transition to FOLLOWER state (STOPPED nodes remain dead)."""
-        with self.node.lock:
+        acquired = self.node.lock.acquire(timeout=0.2)
+        if not acquired:
+            return
+        try:
             if self.node.state == NodeState.STOPPED:
                 return
             
@@ -44,23 +52,35 @@ class ElectionManager:
                 self.node.storage.save_persistent_state(
                     self.node.current_term, self.node.voted_for, self.node.log
                 )
+        finally:
+            self.node.lock.release()
     
     def become_leader(self):
         """Transition to LEADER state and initialize leader-specific state."""
-        with self.node.lock:
+        acquired = self.node.lock.acquire(timeout=0.2)
+        if not acquired:
+            return False
+        try:
             if self.node.state != NodeState.LEADER:
                 self.node.state = NodeState.LEADER
                 self.node._init_leader_state()
                 self.node.last_heartbeat_time = time.time()
                 return True
+        finally:
+            self.node.lock.release()
         return False
     
     def check_election_won(self) -> bool:
         """Check if candidate has won election (received quorum of votes)."""
-        with self.node.lock:
-            total_nodes = len(self.node.peers) + 1
-            majority = (total_nodes // 2) + 1
+        acquired = self.node.lock.acquire(timeout=0.1)
+        if not acquired:
+            return False
+        try:
+            # Use cluster_size for quorum, not current peers length
+            majority = (self.node.cluster_size // 2) + 1
             return len(self.node.votes_received) >= majority
+        finally:
+            self.node.lock.release()
     
     def handle_request_vote(self, request: raft_pb2.VoteRequest, context) -> raft_pb2.VoteResponse:
         """Handle RequestVote RPC (Raft paper, Figure 2, Receiver)."""
@@ -106,7 +126,11 @@ class ElectionManager:
             )
             stub = raft_pb2_grpc.RaftServiceStub(channel)
 
-            with self.node.lock:
+            acquired = self.node.lock.acquire(timeout=0.2)
+            if not acquired:
+                channel.close()
+                return
+            try:
                 if self.node.state != NodeState.CANDIDATE:
                     channel.close()
                     return
@@ -117,14 +141,20 @@ class ElectionManager:
                     lastLogIndex=len(self.node.log) - 1,
                     lastLogTerm=self.node.log[-1].term if self.node.log else 0,
                 )
+            finally:
+                self.node.lock.release()
 
             response = stub.RequestVote(request, timeout=self.node.config.rpc_timeout)
 
-            with self.node.lock:
-                if response.term > self.node.current_term:
-                    self.become_follower(response.term)
-                elif response.voteGranted and self.node.state == NodeState.CANDIDATE:
-                    self.node.votes_received.add(peer_id)
+            acquired = self.node.lock.acquire(timeout=0.2)
+            if acquired:
+                try:
+                    if response.term > self.node.current_term:
+                        self.become_follower(response.term)
+                    elif response.voteGranted and self.node.state == NodeState.CANDIDATE:
+                        self.node.votes_received.add(peer_id)
+                finally:
+                    self.node.lock.release()
 
             channel.close()
         except Exception:

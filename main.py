@@ -13,20 +13,32 @@ def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
-def get_node_input(prompt: str, min_val: int, max_val: int) -> Optional[int]:
-    """Get validated integer input from user"""
+def get_node_ids_input(prompt: str, min_val: int, max_val: int) -> list:
+    """Get validated node IDs input from user (supports multiple IDs separated by space/comma)"""
     try:
-        value = int(input(prompt).strip())
-        if min_val <= value <= max_val:
-            return value
-        print(f"Please enter a number between {min_val} and {max_val}")
-        return None
-    except ValueError:
-        print("Invalid input. Please enter a number.")
-        return None
+        raw_input = input(prompt).strip()
+        if not raw_input:
+            return []
+        
+        # Split by space or comma
+        parts = raw_input.replace(',', ' ').split()
+        node_ids = []
+        
+        for part in parts:
+            try:
+                value = int(part.strip())
+                if min_val <= value <= max_val:
+                    if value not in node_ids:  # Avoid duplicates
+                        node_ids.append(value)
+                else:
+                    print(f"Skipping {value}: must be between {min_val} and {max_val}")
+            except ValueError:
+                print(f"Skipping invalid input: {part}")
+        
+        return node_ids
     except KeyboardInterrupt:
         print("\nCancelled.\n")
-        return None
+        return []
 
 # ============================================================================
 # INTERACTIVE MENU
@@ -80,15 +92,15 @@ class Menu:
             if choice == "0":
                 clear_screen()
             elif choice == "1":
-                self._get_node_input_and_execute(
-                    "Kill node", lambda n: self.manager.kill_node(n)
+                self._get_node_ids_and_execute(
+                    "Kill nodes", lambda n: self.manager.kill_node(n)
                 )
             elif choice == "2":
-                self._get_node_input_and_execute(
-                    "Revive node", lambda n: self.manager.revive_node(n)
+                self._get_node_ids_and_execute(
+                    "Revive nodes", lambda n: self.manager.revive_node(n)
                 )
             elif choice == "3":
-                self._get_node_input_and_execute(
+                self._get_single_node_and_execute(
                     "Query node", lambda n: self.manager.query_node_database(n)
                 )
             elif choice == "4":
@@ -106,17 +118,33 @@ class Menu:
         except Exception as e:
             print(f"Error: {str(e)}")
     
-    def _get_node_input_and_execute(self, action: str, callback):
-        """Get node ID input and execute callback"""
+    def _get_node_ids_and_execute(self, action: str, callback):
+        """Get multiple node IDs input and execute callback for each"""
         summary = self.manager.get_cluster_summary()
         if not summary:
             print("No cluster running")
             return
         
         print(f"Cluster has nodes 0-{summary['total_nodes']-1}")
-        node_id = get_node_input("Enter node ID: ", 0, summary['total_nodes'] - 1)
-        if node_id is not None:
-            callback(node_id)
+        print("Enter node ID(s) separated by space or comma (e.g., '1' or '1 2 3' or '1,2,3'):")
+        node_ids = get_node_ids_input("Node ID(s): ", 0, summary['total_nodes'] - 1)
+        
+        if node_ids:
+            for node_id in node_ids:
+                callback(node_id)
+            print(f"{action}: {node_ids}")
+    
+    def _get_single_node_and_execute(self, action: str, callback):
+        """Get single node ID input and execute callback"""
+        summary = self.manager.get_cluster_summary()
+        if not summary:
+            print("No cluster running")
+            return
+        
+        print(f"Cluster has nodes 0-{summary['total_nodes']-1}")
+        node_ids = get_node_ids_input("Enter node ID: ", 0, summary['total_nodes'] - 1)
+        if node_ids:
+            callback(node_ids[0])
     
 # ============================================================================
 # MAIN
