@@ -32,7 +32,7 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
         self.config = config or NodeConfig()
         self.storage = RaftStorage(node_id)
         self.current_term, self.voted_for, self.log = self.storage.load_persistent_state()
-        self.commit_index = -1  # -1 means nothing committed yet
+        self.commit_index = 0
         self.last_applied = -1  # -1 means nothing applied yet
         self.state = NodeState.FOLLOWER
         self.votes_received: Set[int] = set()

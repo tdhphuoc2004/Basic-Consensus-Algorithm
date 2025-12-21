@@ -85,12 +85,9 @@ class ReplicationManager:
                 )
 
             if request.leaderCommit > self.node.commit_index:
-                last_new_index = (
-                    prev_log_index + len(request.entries)
-                    if request.entries
-                    else prev_log_index
-                )
-                self.node.commit_index = min(request.leaderCommit, last_new_index)
+                # Use actual log length to determine how far we can commit
+                last_log_index = len(self.node.log) - 1 if self.node.log else -1
+                self.node.commit_index = min(request.leaderCommit, last_log_index)
                 self._apply_committed_entries()
                 self.node.storage.save_state_machine(self.node.state_machine.get_data())
 
@@ -159,9 +156,10 @@ class ReplicationManager:
                         ElectionManager(self.node).become_follower(response.term)
                     elif self.node.state == NodeState.LEADER:
                         if response.success:
-                            new_match_index = next_idx + len(entries_to_send) - 1
-                            self.node.match_index[peer_id] = new_match_index
-                            self.node.next_index[peer_id] = new_match_index + 1
+                            # Use response.lastLogIndex to know follower's actual log position
+                            if response.lastLogIndex >= 0:
+                                self.node.match_index[peer_id] = response.lastLogIndex
+                                self.node.next_index[peer_id] = response.lastLogIndex + 1
                             self._update_commit_index()
                         else:
                             self.node.next_index[peer_id] = max(0, self.node.next_index[peer_id] - 1)
@@ -184,6 +182,8 @@ class ReplicationManager:
         # Use cluster_size for quorum, not current peers length
         # This ensures quorum is based on total cluster, not just alive nodes
         quorum = (self.node.cluster_size // 2) + 1
+        
+        new_commit_index = self.node.commit_index
 
         for idx in range(self.node.commit_index + 1, len(self.node.log)):
             count = 1  # Count self
@@ -191,11 +191,21 @@ class ReplicationManager:
                 if self.node.match_index.get(peer_id, -1) >= idx:
                     count += 1
 
-            if count >= quorum and self.node.log[idx].term == self.node.current_term:
-                self.node.commit_index = idx
-                self._apply_committed_entries()
+            if count >= quorum:
+                # Per Raft paper: only commit entries from current term directly
+                # But if we find an entry from current term, we can commit all prior entries too
+                if self.node.log[idx].term == self.node.current_term:
+                    new_commit_index = idx
+                elif new_commit_index >= idx:
+                    # Already covered by a later commit in current term
+                    pass
             else:
                 break
+        
+        if new_commit_index > self.node.commit_index:
+            self.node.commit_index = new_commit_index
+            self._apply_committed_entries()
+            self.node.storage.save_state_machine(self.node.state_machine.get_data())
     
     def send_heartbeat(self, peer_id: int):
         """Send a heartbeat (empty AppendEntries) to peer."""
