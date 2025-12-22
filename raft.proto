@@ -3,6 +3,7 @@ package raft;
 
 service RaftService {
     rpc RequestVote (VoteRequest) returns (VoteResponse);
+    rpc PreVote (PreVoteRequest) returns (PreVoteResponse);
     rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
     rpc ClientRequest (ClientRequestMessage) returns (ClientRequestResponse);
     rpc SimulatePartition (PartitionRequest) returns (PartitionResponse);
@@ -10,6 +11,18 @@ service RaftService {
     rpc GetPartitionStatus (PartitionStatusRequest) returns (PartitionStatusResponse);
 }
 
+// Pre-Vote: Check if election would succeed before incrementing term
+message PreVoteRequest {
+    int32 term = 1;          // Candidate's current term + 1 (hypothetical)
+    int32 candidateId = 2;
+    int32 lastLogIndex = 3;
+    int32 lastLogTerm = 4;
+}
+
+message PreVoteResponse {
+    int32 term = 1;
+    bool voteGranted = 2;
+}
 
 message VoteRequest {
     int32 term = 1;          // Candidate's term

@@ -79,6 +79,9 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
     def RequestVote(self, request: raft_pb2.VoteRequest, context) -> raft_pb2.VoteResponse:
         return self.election_mgr.handle_request_vote(request, context)
 
+    def PreVote(self, request: raft_pb2.PreVoteRequest, context) -> raft_pb2.PreVoteResponse:
+        return self.election_mgr.handle_pre_vote(request, context)
+
     def AppendEntries(self, request: raft_pb2.AppendEntriesRequest, context) -> raft_pb2.AppendEntriesResponse:
         return self.replication_mgr.handle_append_entries(request, context)
 
@@ -133,9 +136,14 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                     self.lock.release()
 
                 if current_state == NodeState.FOLLOWER and election_timeout_reached:
-                    self.election_mgr.become_candidate()
-                    for peer in self.peers:
-                        threading.Thread(target=self.election_mgr.send_request_vote, args=(peer,), daemon=True).start()
+                    # Use Pre-Vote to avoid disrupting cluster with stale term
+                    self.election_mgr.start_election()
+                    # If pre-vote succeeded and became candidate, send vote requests
+                    with self.lock:
+                        is_candidate = self.state == NodeState.CANDIDATE
+                    if is_candidate:
+                        for peer in self.peers:
+                            threading.Thread(target=self.election_mgr.send_request_vote, args=(peer,), daemon=True).start()
 
                 elif current_state == NodeState.CANDIDATE:
                     if self.election_mgr.check_election_won():
@@ -143,9 +151,13 @@ class RaftNode(raft_pb2_grpc.RaftServiceServicer):
                         for peer in self.peers:
                             threading.Thread(target=self.replication_mgr.send_heartbeat, args=(peer,), daemon=True).start()
                     elif election_timeout_reached:
-                        self.election_mgr.become_candidate()
-                        for peer in self.peers:
-                            threading.Thread(target=self.election_mgr.send_request_vote, args=(peer,), daemon=True).start()
+                        # Use Pre-Vote to avoid disrupting cluster with stale term
+                        self.election_mgr.start_election()
+                        with self.lock:
+                            is_candidate = self.state == NodeState.CANDIDATE
+                        if is_candidate:
+                            for peer in self.peers:
+                                threading.Thread(target=self.election_mgr.send_request_vote, args=(peer,), daemon=True).start()
 
                 elif current_state == NodeState.LEADER:
                     if time.time() - self.last_heartbeat_time >= self.config.heartbeat_interval:

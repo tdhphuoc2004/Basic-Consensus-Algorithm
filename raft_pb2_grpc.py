@@ -39,6 +39,11 @@ class RaftServiceStub(object):
                 request_serializer=raft__pb2.VoteRequest.SerializeToString,
                 response_deserializer=raft__pb2.VoteResponse.FromString,
                 _registered_method=True)
+        self.PreVote = channel.unary_unary(
+                '/raft.RaftService/PreVote',
+                request_serializer=raft__pb2.PreVoteRequest.SerializeToString,
+                response_deserializer=raft__pb2.PreVoteResponse.FromString,
+                _registered_method=True)
         self.AppendEntries = channel.unary_unary(
                 '/raft.RaftService/AppendEntries',
                 request_serializer=raft__pb2.AppendEntriesRequest.SerializeToString,
@@ -70,6 +75,12 @@ class RaftServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def RequestVote(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PreVote(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -112,6 +123,11 @@ def add_RaftServiceServicer_to_server(servicer, server):
                     servicer.RequestVote,
                     request_deserializer=raft__pb2.VoteRequest.FromString,
                     response_serializer=raft__pb2.VoteResponse.SerializeToString,
+            ),
+            'PreVote': grpc.unary_unary_rpc_method_handler(
+                    servicer.PreVote,
+                    request_deserializer=raft__pb2.PreVoteRequest.FromString,
+                    response_serializer=raft__pb2.PreVoteResponse.SerializeToString,
             ),
             'AppendEntries': grpc.unary_unary_rpc_method_handler(
                     servicer.AppendEntries,
@@ -166,6 +182,33 @@ class RaftService(object):
             '/raft.RaftService/RequestVote',
             raft__pb2.VoteRequest.SerializeToString,
             raft__pb2.VoteResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PreVote(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftService/PreVote',
+            raft__pb2.PreVoteRequest.SerializeToString,
+            raft__pb2.PreVoteResponse.FromString,
             options,
             channel_credentials,
             insecure,

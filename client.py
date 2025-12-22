@@ -37,7 +37,6 @@ class RaftClusterClient:
         """Find the current leader by querying all nodes"""
         print("\n[*] Searching for cluster leader...")
         
-        # First pass: find node that claims to be leader (success=True)
         for node_id in range(self.num_nodes):
             try:
                 stub, channel = self._create_stub(node_id)
@@ -55,15 +54,37 @@ class RaftClusterClient:
         print("[✗] No leader found in cluster")
         return None
     
-    def send_command(self, command: str, retry: bool = True) -> bool:
+    def connect_to_node(self, node_id: int) -> bool:
+        """Connect to a specific node"""
+        if not (0 <= node_id < self.num_nodes):
+            print(f"[ERROR] Invalid node ID. Must be 0-{self.num_nodes-1}")
+            return False
+        
+        # Test if node is reachable
+        try:
+            stub, channel = self._create_stub(node_id)
+            request = raft_pb2.ClientRequestMessage(command="PING")
+            response = stub.ClientRequest(request, timeout=2)
+            channel.close()
+            
+            self.current_leader = node_id
+            if response.success:
+                print(f"[✓] Connected to Node {node_id} (LEADER)")
+            else:
+                print(f"[✓] Connected to Node {node_id} (FOLLOWER - commands may fail)")
+            return True
+        except:
+            print(f"[✗] Node {node_id} is not reachable")
+            return False
+    
+    def send_command(self, command: str) -> bool:
         """
-        Send a command to the cluster leader.
+        Send a command to the connected node.
         Commands: SET <key> <value>, GET <key>, DELETE <key>
         """
         if self.current_leader is None:
-            if not self.find_leader():
-                print("[ERROR] Cannot send command: No leader available")
-                return False
+            print("[ERROR] No node connected. Use 'connect <node_id>' first.")
+            return False
         
         print(f"\n[*] Sending command: '{command}' to Node {self.current_leader}")
         
@@ -81,21 +102,12 @@ class RaftClusterClient:
                 return True
             else:
                 print(f"[✗] Command failed: {response.message}")
-                if response.leaderId and response.leaderId.isdigit():
-                    new_leader = int(response.leaderId)
-                    if new_leader != self.current_leader and retry:
-                        print(f"[*] Redirecting to new leader: Node {new_leader}")
-                        self.current_leader = new_leader
-                        return self.send_command(command, retry=False)
+                if response.leaderId:
+                    print(f"    Hint: Leader might be Node {response.leaderId}")
                 return False
                 
         except grpc.RpcError as e:
             print(f"[ERROR] RPC failed: {e.code().name} - {e.details()}")
-            if retry:
-                print("[*] Attempting to find new leader...")
-                self.current_leader = None
-                if self.find_leader():
-                    return self.send_command(command, retry=False)
             return False
         except Exception as e:
             print(f"[ERROR] Unexpected error: {str(e)}")
@@ -163,15 +175,41 @@ def print_help():
 """)
 
 
-def interactive_mode(client: RaftClusterClient):
-    """Run the client in interactive mode"""
+def connection_menu(client: RaftClusterClient) -> bool:
+    """Initial connection menu - returns True if connected successfully"""
     print("\n" + "=" * 60)
-    print("  RAFT CLUSTER CLIENT - Interactive Mode")
+    print("  RAFT CLUSTER CLIENT")
+    print("=" * 60)
+    print(f"\nEnter node ID to connect (0-{client.num_nodes-1}), or 'q' to quit:")
+    
+    while True:
+        try:
+            user_input = input("Node ID: ").strip()
+            
+            if user_input.lower() in ['q', 'quit', 'exit']:
+                print("Goodbye!")
+                return False
+            
+            try:
+                node_id = int(user_input)
+                if client.connect_to_node(node_id):
+                    return True
+            except ValueError:
+                print(f"[ERROR] Please enter a number (0-{client.num_nodes-1}) or 'q' to quit")
+                
+        except KeyboardInterrupt:
+            print("\n\nInterrupted.")
+            return False
+        except EOFError:
+            return False
+
+
+def interactive_mode(client: RaftClusterClient):
+    """Run the client in interactive mode (main menu after connection)"""
+    print("\n" + "=" * 60)
+    print(f"  Connected to Node {client.current_leader}")
     print("  Type 'help' for available commands")
     print("=" * 60)
-    
-    # Find leader on startup
-    client.find_leader()
     
     while True:
         try:
@@ -229,9 +267,8 @@ def main():
     if "--help" in args or "-h" in args:
         print("Usage: python client.py [options]")
         print("Options:")
-        print("  --port <port>    Base port number")
+        print("  --port <port>    Base port number (default: 5000)")
         print("  --nodes <n>      Number of nodes in cluster (default: 7)")
-        print("  --command <cmd>  Execute a single command and exit")
         print("  --help, -h       Show this help message")
         return
     
@@ -249,17 +286,10 @@ def main():
     
     client = RaftClusterClient(base_port=base_port, num_nodes=num_nodes)
     
-    # Single command mode
-    if "--command" in args:
-        idx = args.index("--command")
-        if idx + 1 < len(args):
-            command = " ".join(args[idx + 1:])
-            client.find_leader()
-            client.send_command(command)
-            return
-    
-    # Interactive mode
-    interactive_mode(client)
+    # Show connection menu first
+    if connection_menu(client):
+        # If connected, enter interactive mode
+        interactive_mode(client)
 
 
 if __name__ == "__main__":

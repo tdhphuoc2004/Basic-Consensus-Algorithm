@@ -266,3 +266,99 @@ class ClusterManager:
             print(f"Invalid node ID: {node_id}")
             return False
         return True
+
+    # ========================================================================
+    # NETWORK PARTITION SIMULATION
+    # ========================================================================
+
+    def create_partition(self, group_a: List[int], group_b: List[int]) -> bool:
+        """
+        Create a network partition between two groups of nodes.
+        Nodes in group_a cannot communicate with nodes in group_b and vice versa.
+        """
+        if not self.nodes:
+            print("No cluster running")
+            return False
+
+        # Validate all node IDs
+        all_nodes = group_a + group_b
+        for node_id in all_nodes:
+            if not self._validate_node_id(node_id):
+                return False
+
+        # Block communication between groups
+        for node_id in group_a:
+            node = self.nodes[node_id]
+            with node.lock:
+                for blocked_id in group_b:
+                    node.blocked_peers.add(blocked_id)
+
+        for node_id in group_b:
+            node = self.nodes[node_id]
+            with node.lock:
+                for blocked_id in group_a:
+                    node.blocked_peers.add(blocked_id)
+
+        print(f"\n{'='*60}")
+        print("NETWORK PARTITION CREATED")
+        print(f"{'='*60}")
+        print(f"Group A (nodes {group_a}): Cannot communicate with Group B")
+        print(f"Group B (nodes {group_b}): Cannot communicate with Group A")
+        print(f"{'='*60}\n")
+        return True
+
+    def heal_partition(self, node_ids: Optional[List[int]] = None) -> bool:
+        """
+        Heal network partition. If node_ids is None, heal all partitions.
+        Otherwise, clear blocked_peers only for specified nodes.
+        """
+        if not self.nodes:
+            print("No cluster running")
+            return False
+
+        if node_ids is None:
+            # Heal all partitions
+            for node in self.nodes:
+                with node.lock:
+                    node.blocked_peers.clear()
+            print("All network partitions healed")
+        else:
+            # Heal specific nodes
+            for node_id in node_ids:
+                if self._validate_node_id(node_id):
+                    node = self.nodes[node_id]
+                    with node.lock:
+                        node.blocked_peers.clear()
+            # Also remove these nodes from other nodes' blocked_peers
+            for node in self.nodes:
+                with node.lock:
+                    for node_id in node_ids:
+                        node.blocked_peers.discard(node_id)
+            print(f"Healed partitions for nodes: {node_ids}")
+        return True
+
+    def get_partition_status(self) -> dict:
+        """Get current partition status for all nodes."""
+        status = {}
+        for node in self.nodes:
+            with node.lock:
+                status[node.node_id] = {
+                    "blocked_peers": list(node.blocked_peers),
+                    "state": node.state.name,
+                }
+        return status
+
+    def print_partition_status(self):
+        """Print current partition status."""
+        status = self.get_partition_status()
+        print(f"\n{'='*60}")
+        print("NETWORK PARTITION STATUS")
+        print(f"{'='*60}")
+        for node_id, info in status.items():
+            blocked = info["blocked_peers"]
+            state = info["state"]
+            if blocked:
+                print(f"Node {node_id} ({state}): Blocking {blocked}")
+            else:
+                print(f"Node {node_id} ({state}): No blocks")
+        print(f"{'='*60}\n")

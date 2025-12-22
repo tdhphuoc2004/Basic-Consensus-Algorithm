@@ -16,14 +16,22 @@ class ClientManager:
     
     def __init__(self, node):
         self.node = node
-        self.commit_timeout = 10
+        self.commit_timeout = 3
         self.retry_interval = 0.05
+        # Special commands that don't require commit (for health checks in no-quorum situations)
+        self.special_commands = {"PING", "STATUS"}
     
     def handle_client_request(
         self, request: raft_pb2.ClientRequestMessage, context
     ) -> raft_pb2.ClientRequestResponse:
         """Handle client request to append command to log."""
         response = raft_pb2.ClientRequestResponse()
+        command_upper = request.command.strip().upper()
+        
+        # Handle special commands (PING, STATUS) - no commit required
+        # These work even without quorum
+        if command_upper in self.special_commands:
+            return self._handle_special_command(command_upper, response)
 
         with self.node.lock:
             if self.node.state != NodeState.LEADER:
@@ -40,17 +48,31 @@ class ClientManager:
                 self.node.current_term, self.node.voted_for, self.node.log
             )
 
-        self._reset_replication_indices()
         self._trigger_replication()
 
         return self._wait_for_commit(new_index, request.command, response)
     
-    def _reset_replication_indices(self):
-        """Reset next_index and match_index for all followers."""
+    def _handle_special_command(
+        self, command: str, response: raft_pb2.ClientRequestResponse
+    ) -> raft_pb2.ClientRequestResponse:
+        """Handle special commands (PING, STATUS) without commit - works without quorum."""
         with self.node.lock:
-            for peer in self.node.peers:
-                self.node.next_index[peer] = 0
-                self.node.match_index[peer] = -1
+            is_leader = self.node.state == NodeState.LEADER
+            leader_id = self.node.node_id if is_leader else self._find_leader()
+            
+            if command == "PING":
+                response.success = is_leader
+                response.leaderId = str(leader_id) if leader_id is not None else ""
+                response.message = "PONG" if is_leader else "Not leader"
+                return response
+            
+            elif command == "STATUS":
+                response.success = is_leader
+                response.leaderId = str(leader_id) if leader_id is not None else ""
+                response.message = f"Node {self.node.node_id}: {self.node.state.name}, Term: {self.node.current_term}"
+                return response
+        
+        return response
     
     def _trigger_replication(self):
         """Spawn replication threads for all peers."""
